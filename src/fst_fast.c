@@ -712,7 +712,7 @@ static int l_fse_set_final_flags(lua_State *L) {
   return 0;
 }
 
-static const struct luaL_Reg fst_fast[] = {
+static const struct luaL_Reg fst_fast_system[] = {
     {"c_swap", c_swap},
     {"get_instruction_tape", l_get_instruction_tape},
     {"create_pegreg_diffmatch", l_create_pegreg_diffmatch},
@@ -727,7 +727,7 @@ static const struct luaL_Reg fst_fast[] = {
     {"fse_set_final_flags", l_fse_set_final_flags},
     {NULL, NULL}};
 
-int luaopen_fst_fast(lua_State *L) {
-  luaL_newlib(L, fst_fast);
+int luaopen_fst_fast_system(lua_State *L) {
+  luaL_newlib(L, fst_fast_system);
   return 1;
 }

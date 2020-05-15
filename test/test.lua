@@ -1,5 +1,5 @@
 local luaunit = require("luaunit")
-local fst_fast = require("fst_fast")
+local fst_fast = require("fst_fast_system")
 
 -- Simplest case
 
