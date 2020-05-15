@@ -12,7 +12,7 @@ description = {
 build = {
    type = "builtin",
    modules = {
-           fst_fast = "src/fst_fast.c"
+           fst_fast_system = "src/fst_fast.c"
    }
 }
 
