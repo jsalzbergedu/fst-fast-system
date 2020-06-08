@@ -53,11 +53,76 @@ void instruction_tape_destroy(InstructionTape *instrbuff);
 
 void create_pegreg_diffmatch(InstructionTape *instrtape);
 
-void match_one_char(char input, char *output, int *state_number,
-                    FstStateEntry *states, FstStateEntry *current_state_start,
-                    FstStateEntry **next_state);
+typedef struct MatchObject MatchObject;
 
-char *match_string(const char *input, InstructionTape *instrtape,
-                   int *match_success, unsigned short **matched_states);
+struct MatchObject {
+  /**
+   * The state output
+   */
+  unsigned short *state_output;
+  /**
+   * The character output
+   */
+  char *char_output;
+
+  /**
+   * Pointer to the end of the states
+   */
+  unsigned short *state_end;
+
+  /**
+   * Pointer to the end of the characters
+   */
+  char *char_end;
+
+  /**
+   * The char length
+   */
+  size_t char_length;
+
+  /**
+   * The char capacity
+   */
+  size_t char_capacity;
+
+  /**
+   * The state length
+   */
+  size_t state_length;
+
+  /**
+   * The state capacity
+   */
+  size_t state_capacity;
+
+  /**
+   * Match success
+   */
+  int match_success;
+
+  /*
+   * For iterating over the FST States
+   */
+
+  /**
+   * Beginning fst state
+   */
+  unsigned char *beginning;
+
+  /**
+   * Current FST location
+   */
+  unsigned char *current;
+};
+
+void match_one_char(MatchObject *match_object, char input);
+
+/* void match_one_char(char input, char *output, int *state_number, */
+/*                     FstStateEntry *states, FstStateEntry
+ * *current_state_start, */
+/*                     FstStateEntry **next_state); */
+
+void match_string(InstructionTape *instrtape, MatchObject *match_object,
+                  char const *input);
 
 #endif /* FST_FAST_H */

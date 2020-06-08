@@ -3,10 +3,10 @@ rockspec_format = "3.0"
 package = "fst-fast-system"
 version = "dev-1"
 source = {
-   url = "*** please add URL for source tarball, zip or repository here ***"
+   url = "git+https://github.com/jsalzbergedu/fst-fast-system.git"
 }
 description = {
-   homepage = "*** please enter a project homepage ***",
+   homepage = "https://github.com/jsalzbergedu/fst-fast-system",
    license = "MIT License"
 }
 build = {
@@ -15,11 +15,9 @@ build = {
            fst_fast_system = "src/fst_fast.c"
    }
 }
-
 test_dependencies = {
-   "luaunit"
+   "luaunit >= 3"
 }
-
 test = {
    type = "command",
    script = "test/test.lua"

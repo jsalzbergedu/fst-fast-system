@@ -3,8 +3,8 @@
  * @author Jacob Salzberg (jssalzbe)
  * @file fst_fast.c
  */
-#include <assert.h>
 #include "fst_fast.h"
+#include <assert.h>
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
@@ -290,15 +290,17 @@ void fse_initialize_tape(InstructionTape *instrtape) {
 void fse_grow(InstructionTape *instrtape, int targetlen) {
   if (instrtape->capacity <= targetlen) {
     instrtape->capacity = MAX(instrtape->capacity * 2, targetlen);
+    int offset = instrtape->current - instrtape->beginning;
     instrtape->beginning =
         realloc(instrtape->beginning,
                 instrtape->capacity * sizeof(FstStateEntry) * 256);
+    instrtape->current = instrtape->beginning + offset;
     if (!(instrtape->beginning)) {
       perror("Memory allocation failure");
       exit(1);
     }
   }
-};
+}
 
 /**
  * Clear an entire instruction
@@ -519,89 +521,131 @@ void create_pegreg_bak(InstructionTape *it) {
   }
 }
 
-/**
- * Match a single character on a single state.
- * The FST must be deterministic.
- * @param input the input character
- * @param state_number the number that labels the current state
- * @param states the vector of states
- * @param current_state_start the start of the 256 entries that define the
- * current state
- * @param next_state stores the pointer to the state after this is matched
- */
-void match_one_char(char input, char *output, int *state_number,
-                    FstStateEntry *states, FstStateEntry *current_state_start,
-                    FstStateEntry **next_state) {
-  unsigned char uinput = input;
-  *output = current_state_start[uinput].components.outchar;
-  *state_number = current_state_start[uinput].components.out_state;
-  *next_state = states + (*state_number) * 256;
+/* /\** */
+/*  * Match a single character on a single state. */
+/*  * The FST must be deterministic. */
+/*  * @param input the input character */
+/*  * @param state_number the number that labels the current state */
+/*  * @param states the vector of states */
+/*  * @param current_state_start the start of the 256 entries that define the */
+/*  * current state */
+/*  * @param next_state stores the pointer to the state after this is matched */
+/*  *\/ */
+/* void match_one_char(char input, char *output, int *state_number, */
+/*                     FstStateEntry *states, FstStateEntry
+ * *current_state_start, */
+/*                     FstStateEntry **next_state) { */
+/*   unsigned char uinput = input; */
+/*   *output = current_state_start[uinput].components.outchar; */
+/*   *state_number = current_state_start[uinput].components.out_state; */
+/*   *next_state = states + (*state_number) * 256; */
+/* } */
+
+void match_grow_char(MatchObject *match_object, int targetlen) {
+  if (match_object->char_capacity <= targetlen) {
+    match_object->char_capacity =
+        MAX(match_object->char_capacity * 2, targetlen);
+    int offset = match_object->char_end - match_object->char_output;
+    size_t newsize = match_object->char_capacity * sizeof(char);
+    match_object->char_output = realloc(match_object->char_output, newsize);
+    if (!match_object->char_output) {
+      perror("Memory allocation failure");
+      exit(1);
+    }
+    match_object->char_end = match_object->char_output + offset;
+  }
+}
+
+void match_grow_states(MatchObject *match_object, int targetlen) {
+  if (match_object->state_capacity <= targetlen) {
+    match_object->state_capacity =
+        MAX(match_object->state_capacity * 2, targetlen);
+    int offset = match_object->state_end - match_object->state_output;
+    size_t newsize = match_object->state_capacity * sizeof(short);
+    match_object->state_output = realloc(match_object->state_output, newsize);
+    if (!match_object->state_output) {
+      perror("Memory allocation failure");
+      exit(1);
+    }
+    match_object->state_end = match_object->state_output + offset;
+  }
+}
+
+void match_initialize(MatchObject *match_object,
+                      InstructionTape *instruction_tape) {
+  match_object->state_capacity = 10;
+  match_object->state_length = 0;
+  match_object->char_capacity = 10;
+  match_object->char_length = 0;
+  match_object->beginning = instruction_tape->beginning;
+  match_object->current = match_object->beginning;
+  match_object->state_output =
+      malloc(match_object->state_capacity * sizeof(unsigned short));
+  match_object->state_end = match_object->state_output;
+  match_object->char_output =
+      malloc(match_object->char_capacity * sizeof(unsigned short));
+  match_object->char_end = match_object->char_output;
+  match_object->match_success = 0;
+}
+
+void match_destroy(MatchObject *match_object) {
+  free(match_object->state_output);
+  free(match_object->char_output);
+  match_object->beginning = 0;
+  match_object->char_end = 0;
+  match_object->char_output = 0;
+  match_object->current = 0;
+  match_object->state_end = 0;
+  match_object->state_output = 0;
 }
 
 /**
- * Returns a malloced (!) string,
- * and sets matched_states to a malloced (!)
- * array of shorts corresponding to what
- * was matched by what state.
+ * Match a single character on a single state.
+ * The FST must be deterministic.
  */
-char *match_string(const char *input, InstructionTape *instrtape,
-                   int *match_success, unsigned short **matched_states) {
-  /* Output vector */
-  unsigned char *instrbuff = instrtape->beginning;
-  char *retval = malloc(sizeof(char) * 10);
-  char *string_end = retval;
-  int retval_size = 0;
-  int retval_capacity = 10;
+void match_one_char(MatchObject *match_object, char input) {
+  unsigned char uinput = (unsigned char) input;
+  FstStateEntry *fse = (FstStateEntry *) match_object->current;
 
-  /* Matched states */
-  /* Size and capacity piggyback off of that of output vector */
-  *matched_states = malloc(sizeof(unsigned short) * 10);
-  unsigned short *matched_states_end = *matched_states;
+  if (fse[uinput].components.outchar) {
+    match_grow_char(match_object, match_object->char_length + 1);
+    *(match_object->char_end) = fse[uinput].components.outchar;
+    match_object->char_end += 1;
+    match_object->char_length += 1;
+  }
 
-  int state_number = 0;
-  FstStateEntry *states = (FstStateEntry *) instrbuff;
-  FstStateEntry *current_state_start = (FstStateEntry *) instrbuff;
+  match_grow_states(match_object, match_object->state_length + 1);
+
+  unsigned short out_state = fse[uinput].components.out_state;
+  *(match_object->state_end) = out_state;
+  match_object->state_end += 1;
+  match_object->state_length += 1;
+  match_object->current =
+      match_object->beginning + out_state * sizeof(FstStateEntry) * 256;
+}
+
+/**
+ * Using instrtape, match input into match object
+ * @param instrtape the instruction tape
+ * @param match object the match object to be filled in
+ * @param input the input string
+ */
+void match_string(InstructionTape *instrtape, MatchObject *match_object,
+                  const char *input) {
+  match_initialize(match_object, instrtape);
   while (*input) {
-    char output;
-    match_one_char(*input, &output, &state_number, states, current_state_start,
-                   &current_state_start);
+    match_one_char(match_object, *input);
     input += 1;
-    if (output) {
-      if (retval_size == retval_capacity) {
-        retval_capacity *= 2;
-        retval = realloc(retval, retval_capacity);
-        if (!retval) {
-          perror("Failed to allocate memory");
-          exit(1);
-        }
-        matched_states = realloc(matched_states, retval_capacity);
-        if (!matched_states) {
-          perror("Failed to allocate memory");
-          exit(1);
-        }
-      }
-      *string_end = output;
-      string_end += 1;
-      *matched_states_end = state_number;
-      matched_states_end += 1;
-      retval_size += 1;
-    }
   }
 
-  if (retval_size == retval_capacity) {
-    retval_capacity *= 2;
-    retval = realloc(retval, retval_capacity);
-    if (!retval) {
-      perror("Failed to allocate memory");
-      exit(1);
+  if (match_object->state_length > 1) {
+    FstStateEntry *last_state =
+        (FstStateEntry *) instrtape->beginning +
+        match_object->state_output[match_object->state_length - 1] * 256;
+    if (last_state->components.flags & FST_FLAG_FINAL) {
+      match_object->match_success = 1;
     }
   }
-
-  *string_end = '\0';
-  *matched_states_end = state_number;
-
-  *match_success = !!(current_state_start->components.flags & FST_FLAG_FINAL);
-  return retval;
 }
 
 static int c_swap(lua_State *L) {
@@ -629,23 +673,24 @@ static int l_match_string(lua_State *L) {
   const char *input = luaL_checkstring(L, 1);
   InstructionTape *it = (InstructionTape *) lua_touserdata(L, 2);
 
-  int match_success;
-  unsigned short *matched_states;
-  char *outstr = match_string(input, it, &match_success, &matched_states);
+  MatchObject mo;
+  match_initialize(&mo, it);
 
-  lua_pushstring(L, outstr);
+  match_string(it, &mo, input);
 
-  lua_pushboolean(L, match_success);
+  lua_pushlstring(L, mo.char_output, mo.char_length);
+
+  lua_pushboolean(L, mo.match_success);
 
   lua_newtable(L);
-  int counter = 1;
-  while (*outstr) {
-    lua_pushnumber(L, counter);
-    lua_pushnumber(L, matched_states[counter - 1]);
+
+  for (int i = 0; i < mo.state_length; i++) {
+    lua_pushnumber(L, i + 1);
+    lua_pushnumber(L, mo.state_output[i]);
     lua_settable(L, -3);
-    counter += 1;
-    outstr += 1;
   }
+
+  match_destroy(&mo);
 
   return 3;
 }
