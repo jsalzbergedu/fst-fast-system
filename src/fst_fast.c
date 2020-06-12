@@ -291,9 +291,9 @@ void fse_grow(InstructionTape *instrtape, int targetlen) {
   if (instrtape->capacity <= targetlen) {
     instrtape->capacity = MAX(instrtape->capacity * 2, targetlen);
     int offset = instrtape->current - instrtape->beginning;
-    instrtape->beginning =
-        realloc(instrtape->beginning,
-                instrtape->capacity * sizeof(FstStateEntry) * 256);
+    instrtape->beginning = (unsigned char *) realloc(
+        (void *) instrtape->beginning,
+        instrtape->capacity * sizeof(FstStateEntry) * 256);
     instrtape->current = instrtape->beginning + offset;
     if (!(instrtape->beginning)) {
       perror("Memory allocation failure");
@@ -547,7 +547,8 @@ void match_grow_char(MatchObject *match_object, int targetlen) {
         MAX(match_object->char_capacity * 2, targetlen);
     int offset = match_object->char_end - match_object->char_output;
     size_t newsize = match_object->char_capacity * sizeof(char);
-    match_object->char_output = realloc(match_object->char_output, newsize);
+    match_object->char_output =
+        (char *) realloc((void *) match_object->char_output, newsize);
     if (!match_object->char_output) {
       perror("Memory allocation failure");
       exit(1);
@@ -562,7 +563,8 @@ void match_grow_states(MatchObject *match_object, int targetlen) {
         MAX(match_object->state_capacity * 2, targetlen);
     int offset = match_object->state_end - match_object->state_output;
     size_t newsize = match_object->state_capacity * sizeof(short);
-    match_object->state_output = realloc(match_object->state_output, newsize);
+    match_object->state_output = (unsigned short *) realloc(
+        (void *) match_object->state_output, newsize);
     if (!match_object->state_output) {
       perror("Memory allocation failure");
       exit(1);
@@ -579,11 +581,11 @@ void match_initialize(MatchObject *match_object,
   match_object->char_length = 0;
   match_object->beginning = instruction_tape->beginning;
   match_object->current = match_object->beginning;
-  match_object->state_output =
-      malloc(match_object->state_capacity * sizeof(unsigned short));
+  match_object->state_output = (unsigned short *) malloc(
+      match_object->state_capacity * sizeof(unsigned short));
   match_object->state_end = match_object->state_output;
   match_object->char_output =
-      malloc(match_object->char_capacity * sizeof(unsigned short));
+      (char *) malloc(match_object->char_capacity * sizeof(char));
   match_object->char_end = match_object->char_output;
   match_object->match_success = 0;
 }
@@ -656,8 +658,200 @@ static int c_swap(lua_State *L) {
   return 2;
 }
 
+/*
+ * Instruction tape inspection library:
+ * Contains building blocks for:
+ *
+ * fst_fast.inspector.get_length(it)
+ *
+ * which returns the # of states in the instruction tape
+ *
+ * fst_fast.inspector.is_valid(it, n)
+ *
+ * which returns whether Nth state is valid
+ *
+ * fst_fast.inspector.is_final(it, n)
+ *
+ * returns whether the Nth state is final
+ *
+ * fst_fast.inspector.is_initial(it, n)
+ *
+ * returns whether the Nth state is initial
+ *
+ * fst_fast.inspector.outgoings(it, n)
+ *
+ * Gets all of the outgoing transitions at N
+ *
+ * fst_fast.dump(it, filename)
+ *
+ * Dumps the FST at filename
+ *
+ * fst_fast.load(filename)
+ *
+ * Creates an FST based on the dump
+ */
+
+int inspector_get_length(InstructionTape *it) {
+  return it->length;
+}
+
+static FstStateEntry inspector_getn(InstructionTape *it, int n) {
+  return ((FstStateEntry *) (it->beginning))[n * 256];
+}
+
+int inspector_is_valid(InstructionTape *it, int n) {
+  return inspector_getn(it, n).components.flags & FST_FLAG_VALID;
+}
+
+int inspector_is_final(InstructionTape *it, int n) {
+  return inspector_getn(it, n).components.flags & FST_FLAG_FINAL;
+}
+
+int inspector_is_initial(InstructionTape *it, int n) {
+  return inspector_getn(it, n).components.flags & FST_FLAG_INITIAL;
+}
+
+typedef struct Outgoings Outgoings;
+
+struct Outgoings {
+  char inputs[256];
+  char outputs[256];
+  unsigned short states[256];
+  int length;
+};
+
+void inspector_outgoings(InstructionTape *it, int n, Outgoings *outgoings) {
+  FstStateEntry *the_state = (FstStateEntry *) (it->beginning) + (n * 256);
+  outgoings->length = 0;
+  for (unsigned char i = 0; i < 255; i++) {
+    char oc = the_state[i].components.outchar;
+    if (oc) {
+      outgoings->inputs[outgoings->length] = i;
+      outgoings->outputs[outgoings->length] = oc;
+      outgoings->states[outgoings->length] = the_state[i].components.out_state;
+      outgoings->length += 1;
+    }
+  }
+}
+
+void inspector_dumpfile(FILE *f, InstructionTape *it) {
+  /*
+   * Beginning is zero, and current is zero.
+   * capacity=length; and length must be
+   * written.
+   */
+  fwrite((void *) &(it->length), sizeof(size_t), 1, f);
+  for (int i = 0; i < it->length; i++) {
+    void *state = (void *) (it->beginning + (i * 256) * sizeof(FstStateEntry));
+    fwrite(state, sizeof(FstStateEntry), 256, f);
+  }
+}
+
+InstructionTape *inspector_loadfile(FILE *f) {
+  InstructionTape *it = (InstructionTape *) malloc(sizeof(InstructionTape));
+  fse_initialize_tape(it);
+
+  size_t len = 0;
+  fread((void *) &len, sizeof(size_t), 1, f);
+  fse_grow(it, len);
+  it->length = len;
+
+  for (int i = 0; i < it->length; i++) {
+    void *state = (void *) (it->beginning + (i * 256) * sizeof(FstStateEntry));
+    fread(state, sizeof(FstStateEntry), 256, f);
+  }
+
+  return it;
+}
+
+static int l_inspector_get_length(lua_State *L) {
+  InstructionTape *it = (InstructionTape *) lua_touserdata(L, 1);
+  lua_pushinteger(L, inspector_get_length(it));
+  return 1;
+}
+
+static int l_inspector_is_valid(lua_State *L) {
+  InstructionTape *it = (InstructionTape *) lua_touserdata(L, 1);
+  int n = luaL_checkint(L, 2);
+  lua_pushboolean(L, inspector_is_valid(it, n));
+  return 1;
+}
+
+static int l_inspector_is_final(lua_State *L) {
+  InstructionTape *it = (InstructionTape *) lua_touserdata(L, 1);
+  int n = luaL_checkint(L, 2);
+  lua_pushboolean(L, inspector_is_final(it, n));
+  return 1;
+}
+
+static int l_inspector_is_initial(lua_State *L) {
+  InstructionTape *it = (InstructionTape *) lua_touserdata(L, 1);
+  int n = luaL_checkint(L, 2);
+  lua_pushboolean(L, inspector_is_final(it, n));
+  return 1;
+}
+
+static int l_inspector_outgoings(lua_State *L) {
+  InstructionTape *it = (InstructionTape *) lua_touserdata(L, 1);
+  int n = luaL_checkint(L, 2);
+  Outgoings outgoings;
+  inspector_outgoings(it, n, &outgoings);
+  lua_newtable(L);
+  for (int i = 0; i < outgoings.length; i++) {
+    lua_pushinteger(L, i + 1);
+
+    lua_newtable(L);
+    lua_pushstring(L, "input");
+    lua_pushlstring(L, outgoings.inputs + i, 1);
+    lua_settable(L, -3);
+    lua_pushstring(L, "output");
+    lua_pushlstring(L, outgoings.outputs + i, 1);
+    lua_settable(L, -3);
+    lua_pushstring(L, "state");
+    lua_pushinteger(L, outgoings.states[i]);
+    lua_settable(L, -3);
+
+    lua_settable(L, -3);
+  }
+
+  return 1;
+}
+
+static int l_inspector_dumpfile(lua_State *L) {
+  InstructionTape *it = (InstructionTape *) lua_touserdata(L, 1);
+  const char *filename = luaL_checkstring(L, 2);
+  FILE *f = fopen(filename, "wb");
+  if (!f) {
+    lua_error(L);
+    return 0;
+  }
+  inspector_dumpfile(f, it);
+  fclose(f);
+  return 0;
+}
+
+static int l_inspector_loadfile(lua_State *L) {
+  /* Get file */
+  const char *filename = luaL_checkstring(L, 1);
+  FILE *f = fopen(filename, "rb");
+  if (!f) {
+    lua_error(L);
+    return 0;
+  }
+
+  /* Load file into tape */
+  InstructionTape *it = inspector_loadfile(f);
+
+  /* Done with file */
+  fclose(f);
+
+  /* Return tape */
+  lua_pushlightuserdata(L, it);
+  return 1;
+}
+
 static int l_get_instruction_tape(lua_State *L) {
-  InstructionTape *it = malloc(sizeof(InstructionTape));
+  InstructionTape *it = (InstructionTape *) malloc(sizeof(InstructionTape));
   fse_initialize_tape(it);
   lua_pushlightuserdata(L, (void *) it);
   return 1;
@@ -770,6 +964,13 @@ static const struct luaL_Reg fst_fast_system[] = {
     {"fse_set_outchar", l_fse_set_outchar},
     {"fse_finish", l_fse_finish},
     {"fse_set_final_flags", l_fse_set_final_flags},
+    {"inspector_dumpfile", l_inspector_dumpfile},
+    {"inspector_is_final", l_inspector_is_final},
+    {"inspector_is_valid", l_inspector_is_valid},
+    {"inspector_loadfile", l_inspector_loadfile},
+    {"inspector_outgoings", l_inspector_outgoings},
+    {"inspector_get_length", l_inspector_get_length},
+    {"inspector_is_initial", l_inspector_is_initial},
     {NULL, NULL}};
 
 int luaopen_fst_fast_system(lua_State *L) {
