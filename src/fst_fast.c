@@ -640,7 +640,7 @@ void match_string(InstructionTape *instrtape, MatchObject *match_object,
     input += 1;
   }
 
-  if (match_object->state_length > 1) {
+  if (match_object->state_length > 0) {
     FstStateEntry *last_state =
         (FstStateEntry *) instrtape->beginning +
         match_object->state_output[match_object->state_length - 1] * 256;
